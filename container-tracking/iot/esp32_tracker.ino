@@ -1,52 +1,63 @@
 /**
  * ================================================================
- * IoT Chemical Container Tracking System
- * ESP32 DevKit v4 — Single File Implementation
+ * KAVACH — IoT Chemical Container Tracking System
+ * ESP32 DevKit v4 — Wokwi Simulation
  *
- * Modified for new /iot/sync endpoint (No GPS/Location, HMAC Payload)
+ * Pin Layout (matches diagram.json):
+ *   RFID MFRC522: SDA=5, SCK=18, MOSI=23, MISO=19, RST=4
+ *   MPU6050:      SDA=21, SCL=22
+ *   LDR:          AO=32
+ *   Button:       34 (seal break simulator)
+ *   LED (Red):    26
+ *   Buzzer:       25
  * ================================================================
  */
 
 #include <SPI.h>
+#include <MFRC522.h>
 #include <Wire.h>
 #include <MPU6050.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 #include "mbedtls/md.h"
 
 // ================================================================
 // ===== CONFIGURATION =====
 // ================================================================
 
-// WiFi
+// WiFi — Wokwi uses "Wokwi-GUEST" with no password
 #define WIFI_SSID              "Wokwi-GUEST"
 #define WIFI_PASS              ""
 #define WIFI_RETRY_INTERVAL_MS  10000UL
 
-// Device & Container Provisioning
-// MUST MATCH BACKEND DB GENERATED DATA
+// Device & Container Provisioning — FILL THESE FROM MANUFACTURER DASHBOARD
 #define CONTAINER_NUMBER       "YOUR-CONTAINER-ID"
 #define SECRET_KEY             "your-secret-key-from-backend-dashboard"
 
-// API - Replace with your backend's IP and port
-#define API_ENDPOINT           "http://192.168.1.XXX:5000/iot/sync"
+// API — Paste your Ngrok URL here
+#define API_ENDPOINT           "https://danny-colonisable-unostensively.ngrok-free.dev/iot/sync"
 #define API_TIMEOUT_MS         5000
 #define API_MAX_RETRIES        3
 #define API_RETRY_BACKOFF_MS   2000UL
 #define EVENT_QUEUE_SIZE       20
 
-// Pin definitions
+// ===== PIN DEFINITIONS (match diagram.json) =====
+// RFID MFRC522
+#define RFID_SS_PIN            5
+#define RFID_RST_PIN           4
+// SPI pins are default: SCK=18, MOSI=23, MISO=19
+
+// MPU6050
 #define MPU_SDA_PIN            21
 #define MPU_SCL_PIN            22
-#define BUTTON_PIN             34
+
+// Sensors & Actuators
 #define LDR_PIN                32
-#define METAL_STRIP_PIN        33
+#define BUTTON_PIN             34
 #define LED_PIN                26
 #define BUZZER_PIN             25
 
 // Tamper thresholds
-#define BUTTON_HOLD_MS         2000UL
 #define SEAL_LOW_MS            1000UL
 #define LDR_THRESHOLD          2500
 #define LDR_SUSTAINED_MS       3000UL
@@ -55,6 +66,9 @@
 // Gyro reporting
 #define GYRO_REPORT_INTERVAL_MS  60000UL
 #define GYRO_VIBRATION_THRESHOLD 1.5f
+
+// RFID scan interval
+#define RFID_SCAN_INTERVAL_MS  2000UL
 
 // ================================================================
 // ===== GLOBAL STATE =====
@@ -66,9 +80,10 @@ static SystemState sysState        = SYS_INIT;
 static unsigned long wifiRetryTime = 0;
 static bool          isOnline      = false;
 
-// ================================================================
-// ===== SENSOR & TAMPER STATE =====
-// ================================================================
+// RFID
+MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
+static unsigned long rfid_lastScan = 0;
+static String lastRfidUid          = "";
 
 // LDR moving average
 static int           ldr_samples[LDR_AVG_SAMPLES] = {0};
@@ -77,7 +92,7 @@ static bool          ldr_aboveThreshold = false;
 static unsigned long ldr_thresholdStart = 0;
 static bool          ldr_alerted        = false;
 
-// Metal strip (seal)
+// Metal strip / Button (seal)
 static bool          seal_lastState     = true;
 static unsigned long seal_lowStart      = 0;
 static bool          seal_alerted       = false;
@@ -87,17 +102,17 @@ static MPU6050       mpu;
 static float         gyro_prevMag       = 0.0f;
 static unsigned long gyro_lastReport    = 0;
 
-// Track persistent anomalies until sync
+// Persistent anomaly flags (until sync)
 static bool isSealBroken     = false;
 static bool isLightDetected  = false;
 static bool isAbnormalMotion = false;
 
 // ================================================================
-// ===== NETWORK SECTION =====
+// ===== NETWORK QUEUE =====
 // ================================================================
 
 static char          api_queue[EVENT_QUEUE_SIZE][512];
-static char          sig_queue[EVENT_QUEUE_SIZE][65]; // Store signatures corresponding to payload
+static char          sig_queue[EVENT_QUEUE_SIZE][65];
 static int           api_qHead       = 0;
 static int           api_qTail       = 0;
 static int           api_qCount      = 0;
@@ -105,13 +120,9 @@ static int           api_retryCount  = 0;
 static unsigned long api_retryTime   = 0;
 
 // ================================================================
-// ===== SECURITY UTILITIES =====
+// ===== SECURITY — HMAC-SHA256 =====
 // ================================================================
 
-/**
- * Generates an HMAC-SHA256 signature of the EXACT JSON payload.
- * Output written into hexOut (must be >= 65 bytes).
- */
 static void generateSignature(const char* payload, char* hexOut) {
   uint8_t hmacResult[32];
   mbedtls_md_context_t ctx;
@@ -132,9 +143,6 @@ static void generateSignature(const char* payload, char* hexOut) {
 // ===== NETWORK FUNCTIONS =====
 // ================================================================
 
-/**
- * Enqueues a formatted JSON payload and its HMAC signature for sending.
- */
 static void enqueueEvent(bool seal, bool light, bool motion) {
   if (api_qCount >= EVENT_QUEUE_SIZE) {
     Serial.println(F("[API] Queue full — dropping oldest event."));
@@ -142,7 +150,6 @@ static void enqueueEvent(bool seal, bool light, bool motion) {
     api_qCount--;
   }
 
-  // Construct EXACT JSON that backend stringify matches to ensure signature validity
   char json[256];
   snprintf(json, sizeof(json),
     "{\"containerNumber\":\"%s\",\"sealBroken\":%s,\"lightDetected\":%s,\"abnormalMotion\":%s}",
@@ -157,7 +164,7 @@ static void enqueueEvent(bool seal, bool light, bool motion) {
 
   strncpy(api_queue[api_qTail], json, 511);
   api_queue[api_qTail][511] = '\0';
-  
+
   strncpy(sig_queue[api_qTail], signature, 64);
   sig_queue[api_qTail][64] = '\0';
 
@@ -166,9 +173,6 @@ static void enqueueEvent(bool seal, bool light, bool motion) {
   Serial.printf("[API] Queued (T:%d). Payload: %s\n", api_qCount, json);
 }
 
-/**
- * Performs a single HTTP POST attempt with custom signature header.
- */
 static bool doHttpPost(const char* json, const char* signature) {
   HTTPClient http;
   http.begin(API_ENDPOINT);
@@ -187,9 +191,6 @@ static bool doHttpPost(const char* json, const char* signature) {
   return false;
 }
 
-/**
- * Non-blocking API send loop.
- */
 static void sendToBackend() {
   if (!isOnline || api_qCount == 0) return;
 
@@ -205,12 +206,12 @@ static void sendToBackend() {
     api_qHead = (api_qHead + 1) % EVENT_QUEUE_SIZE;
     api_qCount--;
     api_retryCount = 0;
-    
+
     // Reset anomaly flags once successfully synced
     isSealBroken = false;
     isLightDetected = false;
     isAbnormalMotion = false;
-    
+
     Serial.printf("[API] Sent OK. Remaining: %d\n", api_qCount);
   } else {
     api_retryCount++;
@@ -222,6 +223,39 @@ static void sendToBackend() {
       api_retryCount = 0;
     }
   }
+}
+
+// ================================================================
+// ===== RFID FUNCTIONS =====
+// ================================================================
+
+static void handleRFID() {
+  unsigned long now = millis();
+  if ((now - rfid_lastScan) < RFID_SCAN_INTERVAL_MS) return;
+  rfid_lastScan = now;
+
+  if (!rfid.PICC_IsNewCardPresent()) return;
+  if (!rfid.PICC_ReadCardSerial()) return;
+
+  String uid = "";
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    if (rfid.uid.uidByte[i] < 0x10) uid += "0";
+    uid += String(rfid.uid.uidByte[i], HEX);
+  }
+  uid.toUpperCase();
+
+  if (uid != lastRfidUid) {
+    lastRfidUid = uid;
+    Serial.printf("[RFID] Card detected! UID: %s\n", uid.c_str());
+
+    // Flash LED to acknowledge scan
+    digitalWrite(LED_PIN, HIGH);
+    delay(200);
+    digitalWrite(LED_PIN, LOW);
+  }
+
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
 }
 
 // ================================================================
@@ -247,7 +281,7 @@ static void handleTamper() {
   ldr_samples[ldr_sampleIdx] = analogRead(LDR_PIN);
   ldr_sampleIdx = (ldr_sampleIdx + 1) % LDR_AVG_SAMPLES;
   int avg = ldrAverage();
-  
+
   if (avg > LDR_THRESHOLD) {
     if (!ldr_aboveThreshold) {
       ldr_aboveThreshold = true;
@@ -258,15 +292,16 @@ static void handleTamper() {
       isLightDetected = true;
       triggerTamperState(isSealBroken, isLightDetected, isAbnormalMotion);
       ldr_alerted = true;
+      Serial.println("[LDR] Light tamper triggered!");
     }
   } else {
     ldr_aboveThreshold = false;
     ldr_alerted = false;
   }
 
-  // 2. Metal Strip (Seal Broken)
-  bool sealNow = (digitalRead(METAL_STRIP_PIN) == LOW);
-  if (sealNow) {
+  // 2. Button Press (simulates Seal Broken in Wokwi)
+  bool buttonPressed = (digitalRead(BUTTON_PIN) == LOW);
+  if (buttonPressed) {
     if (!seal_lastState) {
       seal_lowStart = now;
       seal_alerted = false;
@@ -275,12 +310,13 @@ static void handleTamper() {
       isSealBroken = true;
       triggerTamperState(isSealBroken, isLightDetected, isAbnormalMotion);
       seal_alerted = true;
+      Serial.println("[SEAL] Seal broken tamper triggered!");
     }
   } else {
     seal_alerted = false;
     seal_lowStart = 0;
   }
-  seal_lastState = sealNow;
+  seal_lastState = buttonPressed;
 }
 
 // ================================================================
@@ -305,13 +341,14 @@ static void handleGyro() {
   }
   gyro_prevMag = mag;
 
-  // Periodic normal telemetry heartbeat
+  // Periodic heartbeat telemetry
   unsigned long now = millis();
   if ((now - gyro_lastReport) > GYRO_REPORT_INTERVAL_MS) {
-     gyro_lastReport = now;
-     digitalWrite(LED_PIN, LOW); // Turn off indicators if sending regular safe heartbeat
-     digitalWrite(BUZZER_PIN, LOW);
-     enqueueEvent(isSealBroken, isLightDetected, isAbnormalMotion);
+    gyro_lastReport = now;
+    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
+    enqueueEvent(isSealBroken, isLightDetected, isAbnormalMotion);
+    Serial.println("[Heartbeat] Sending periodic telemetry.");
   }
 }
 
@@ -322,22 +359,43 @@ static void handleGyro() {
 static void initHardware() {
   Serial.begin(115200);
   delay(200);
-  Serial.println(F("\n[BOOT] Safe Chemical Container Tracker Starting..."));
+  Serial.println(F("\n========================================"));
+  Serial.println(F("  KAVACH Container Tracker — Booting..."));
+  Serial.println(F("========================================"));
 
+  // GPIO setup
   pinMode(LDR_PIN, INPUT);
-  pinMode(METAL_STRIP_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
-  
   digitalWrite(LED_PIN, LOW);
   digitalWrite(BUZZER_PIN, LOW);
 
+  // SPI & RFID
+  SPI.begin(18, 19, 23, RFID_SS_PIN); // SCK, MISO, MOSI, SS
+  rfid.PCD_Init();
+  delay(100);
+  if (rfid.PCD_PerformSelfTest()) {
+    Serial.println(F("[RFID] MFRC522 initialized OK."));
+  } else {
+    Serial.println(F("[RFID] MFRC522 init FAILED — check wiring!"));
+  }
+  rfid.PCD_Init(); // Re-init after self-test clears registers
+
+  // I2C & MPU6050
   Wire.begin(MPU_SDA_PIN, MPU_SCL_PIN);
   mpu.initialize();
+  if (mpu.testConnection()) {
+    Serial.println(F("[IMU]  MPU6050 connected OK."));
+  } else {
+    Serial.println(F("[IMU]  MPU6050 connection FAILED!"));
+  }
 
+  // WiFi
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   sysState = SYS_WIFI_CONNECTING;
+  Serial.println(F("[WiFi] Connecting to Wokwi-GUEST..."));
 }
 
 static void handleWiFi() {
@@ -345,16 +403,18 @@ static void handleWiFi() {
   switch (sysState) {
     case SYS_WIFI_CONNECTING:
       if (connected) {
-        Serial.printf("[WiFi] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
         isOnline = true;
         sysState = SYS_RUNNING;
       } else if (millis() > 20000UL) {
+        Serial.println(F("[WiFi] Timeout — running offline, will retry."));
         isOnline = false;
         sysState = SYS_RUNNING;
       }
       break;
     case SYS_RUNNING:
       if (!connected) {
+        Serial.println(F("[WiFi] Disconnected — reconnecting..."));
         isOnline = false;
         sysState = SYS_WIFI_RECONNECTING;
         wifiRetryTime = millis();
@@ -363,6 +423,7 @@ static void handleWiFi() {
       break;
     case SYS_WIFI_RECONNECTING:
       if (connected) {
+        Serial.println(F("[WiFi] Reconnected!"));
         isOnline = true;
         sysState = SYS_RUNNING;
       } else if ((millis() - wifiRetryTime) >= WIFI_RETRY_INTERVAL_MS) {
@@ -375,13 +436,18 @@ static void handleWiFi() {
   }
 }
 
+// ================================================================
+// ===== SETUP & LOOP =====
+// ================================================================
+
 void setup() {
   initHardware();
-  enqueueEvent(false, false, false); // Send initial boot clear state
+  enqueueEvent(false, false, false); // Boot-clear heartbeat
 }
 
 void loop() {
   handleWiFi();
+  handleRFID();
   handleTamper();
   handleGyro();
   sendToBackend();
