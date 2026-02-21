@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+}
+
+enum Role {
+  MANUFACTURER
+  RECEIVER
+  ENFORCEMENT
+}
+
+model Container {
+  id             String         @id @default(uuid())
+  batchNumber    String
+  containerNumber String        @unique
+  rfidUid        String?        @unique
+  secretKey      String
+  manufacturerId String
+  status         ContainerStatus @default(MANUFACTURED)
+  createdAt      DateTime       @default(now())
+
+  telemetry      Telemetry[]
+  events         Event[]
+  accessGrants   AccessGrant[]
+}
+
+enum ContainerStatus {
+  MANUFACTURED
+  DISPATCHED
+  DELIVERED
+}
+
+model AccessGrant {
+  id          String   @id @default(uuid())
+  containerId String
+  tokenHash   String
+  expiresAt   DateTime
+  isUsed      Boolean  @default(false)
+
+  container   Container @relation(fields: [containerId], references: [id])
+}
+
+model Telemetry {
+  id             String   @id @default(uuid())
+  containerId    String
+
+  sealBroken     Boolean
+  lightDetected  Boolean
+  abnormalMotion Boolean
+  createdAt      DateTime @default(now())
+
+  container      Container @relation(fields: [containerId], references: [id])
+}
+
+model Event {
+  id          String   @id @default(uuid())
+  containerId String
+  eventType   String
+  description String
+  txHash      String?
+  createdAt   DateTime @default(now())
+
+  container   Container @relation(fields: [containerId], references: [id])
+}
