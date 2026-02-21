@@ -2,13 +2,11 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
-
-// Placeholder Components
-const Login = () => <div className="p-4"><h1 className="text-2xl">Login Page</h1></div>;
-const ManufacturerDashboard = () => <div className="p-4"><h1 className="text-2xl">Manufacturer Dashboard</h1></div>;
-const ReceiverVerification = () => <div className="p-4"><h1 className="text-2xl">Receiver Verification</h1></div>;
-const EnforcementMonitor = () => <div className="p-4"><h1 className="text-2xl">Enforcement Monitor</h1></div>;
-const ContainerDetail = () => <div className="p-4"><h1 className="text-2xl">Container Detail</h1></div>;
+import Login from './pages/Login';
+import ManufacturerDashboard from './pages/ManufacturerDashboard';
+import ReceiverVerification from './pages/ReceiverVerification';
+import EnforcementMonitor from './pages/EnforcementMonitor';
+import ContainerDetail from './pages/ContainerDetail';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user } = useAuth();
@@ -22,30 +20,25 @@ function App() {
     <Router>
       <AuthProvider>
         <SocketProvider>
-          <div className="min-h-screen bg-gray-100 text-gray-900">
-            <nav className="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center">
-              <h1 className="text-xl font-bold">Tamper-Proof Tracking System</h1>
+          <div>
+            <nav className="navbar">
+              <h1>🛡️ Kavach — Tamper-Proof Tracking</h1>
             </nav>
-            <main className="container mx-auto py-6">
+            <main className="main-container">
               <Routes>
                 <Route path="/login" element={<Login />} />
-
                 <Route path="/manufacturer" element={
                   <ProtectedRoute allowedRoles={['MANUFACTURER']}>
                     <ManufacturerDashboard />
                   </ProtectedRoute>
                 } />
-
                 <Route path="/receiver" element={<ReceiverVerification />} />
-
                 <Route path="/enforcement" element={
                   <ProtectedRoute allowedRoles={['ENFORCEMENT', 'MANUFACTURER']}>
                     <EnforcementMonitor />
                   </ProtectedRoute>
                 } />
-
                 <Route path="/container/:id" element={<ContainerDetail />} />
-
                 <Route path="/" element={<Navigate to="/login" />} />
               </Routes>
             </main>

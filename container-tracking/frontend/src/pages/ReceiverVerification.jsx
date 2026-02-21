@@ -3,7 +3,7 @@ import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 
 const ReceiverVerification = () => {
-    const { token, user } = useAuth();
+    const { token } = useAuth();
     const [permitToken, setPermitToken] = useState('');
     const [sessionToken, setSessionToken] = useState('');
     const [containerId, setContainerId] = useState('');
@@ -27,10 +27,8 @@ const ReceiverVerification = () => {
     const handleScan = async (e) => {
         e.preventDefault();
         try {
-            // In a real app, the sessionToken would be sent instead of the base user token,
-            // but for demo, we'll authenticate the receiver via the base token and pass containerId in body
             const { data } = await axios.post('http://localhost:5000/receiver/scan', { containerId, rfidUid }, {
-                headers: { Authorization: `Bearer ${token}` } // Simplified for demo
+                headers: { Authorization: `Bearer ${token}` }
             });
             setStatusMsg(`Success! ${data.message} TxHash: ${data.txHash}`);
         } catch (e) {
@@ -39,29 +37,31 @@ const ReceiverVerification = () => {
     };
 
     return (
-        <div className="max-w-2xl mx-auto space-y-6">
-            <div className="bg-white p-6 rounded-xl shadow border-l-4 border-blue-500">
-                <h2 className="text-xl font-bold mb-4">Step 1: Activate Delivery Permit</h2>
-                <form onSubmit={handleActivate} className="flex gap-4">
-                    <input type="text" placeholder="Enter Permit Token" className="border p-2 rounded w-full"
-                        value={permitToken} onChange={e => setPermitToken(e.target.value)} required />
-                    <button className="bg-blue-600 text-white px-4 py-2 rounded font-bold hover:bg-blue-700">Activate</button>
+        <div style={{ maxWidth: 720, margin: '0 auto' }}>
+            <div className="card card--blue-border">
+                <h2 className="card-title">Step 1: Activate Delivery Permit</h2>
+                <form onSubmit={handleActivate} className="form-row">
+                    <div className="form-group">
+                        <input type="text" placeholder="Enter Permit Token" value={permitToken} onChange={e => setPermitToken(e.target.value)} required />
+                    </div>
+                    <button className="btn btn-primary" type="submit">Activate</button>
                 </form>
             </div>
 
             {sessionToken && (
-                <div className="bg-white p-6 rounded-xl shadow border-l-4 border-purple-500">
-                    <h2 className="text-xl font-bold mb-4">Step 2: Scan Container RFID</h2>
-                    <form onSubmit={handleScan} className="flex gap-4">
-                        <input type="text" placeholder="Simulate RFID UID Scan" className="border p-2 rounded w-full"
-                            value={rfidUid} onChange={e => setRfidUid(e.target.value)} required />
-                        <button className="bg-purple-600 text-white px-4 py-2 rounded font-bold hover:bg-purple-700">Verify</button>
+                <div className="card card--purple-border">
+                    <h2 className="card-title">Step 2: Scan Container RFID</h2>
+                    <form onSubmit={handleScan} className="form-row">
+                        <div className="form-group">
+                            <input type="text" placeholder="Simulate RFID UID Scan" value={rfidUid} onChange={e => setRfidUid(e.target.value)} required />
+                        </div>
+                        <button className="btn btn-purple" type="submit">Verify</button>
                     </form>
                 </div>
             )}
 
             {statusMsg && (
-                <div className={`p-4 rounded font-bold ${statusMsg.includes('REJECTED') ? 'bg-red-200 text-red-800' : 'bg-green-200 text-green-800'}`}>
+                <div className={`status-msg ${statusMsg.includes('REJECTED') ? 'status-msg--error' : 'status-msg--success'}`}>
                     {statusMsg}
                 </div>
             )}

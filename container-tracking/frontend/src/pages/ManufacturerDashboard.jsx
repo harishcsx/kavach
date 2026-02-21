@@ -8,9 +8,7 @@ const ManufacturerDashboard = () => {
     const [newContainer, setNewContainer] = useState({ batchNumber: '', containerNumber: '' });
     const [permitHours, setPermitHours] = useState(24);
 
-    useEffect(() => {
-        fetchContainers();
-    }, []);
+    useEffect(() => { fetchContainers(); }, []);
 
     const fetchContainers = async () => {
         try {
@@ -27,7 +25,8 @@ const ManufacturerDashboard = () => {
             const { data } = await axios.post('http://localhost:5000/containers/create', newContainer, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            alert(`Container Created! Secret Key (SAVE THIS for ESP32): ${data.secretKey}`);
+            alert(`Container Created!\n\nSecret Key (SAVE THIS for ESP32):\n${data.secretKey}`);
+            setNewContainer({ batchNumber: '', containerNumber: '' });
             fetchContainers();
         } catch (e) { alert("Failed to create") }
     };
@@ -37,7 +36,7 @@ const ManufacturerDashboard = () => {
             await axios.post(`http://localhost:5000/containers/${id}/dispatch`, {}, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            alert("Dispatched");
+            alert("Dispatched!");
             fetchContainers();
         } catch (e) { alert("Failed to dispatch") }
     };
@@ -47,60 +46,67 @@ const ManufacturerDashboard = () => {
             const { data } = await axios.post(`http://localhost:5000/containers/${id}/permit`, { expiresInHours: permitHours }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            alert(`Permit Generated. Token: ${data.token}`);
+            alert(`Permit Token:\n${data.token}`);
         } catch (e) { alert("Failed to generate permit") }
     };
 
     return (
-        <div className="space-y-8">
-            <div className="bg-white p-6 rounded-xl shadow">
-                <h2 className="text-xl font-bold mb-4">Register New Container</h2>
-                <form onSubmit={handleCreate} className="flex gap-4 items-end">
-                    <div>
-                        <label className="block text-sm">Batch Number</label>
-                        <input type="text" className="border p-2 rounded w-full" value={newContainer.batchNumber} onChange={e => setNewContainer({ ...newContainer, batchNumber: e.target.value })} required />
+        <div>
+            <div className="card">
+                <h2 className="card-title">📦 Register New Container</h2>
+                <form onSubmit={handleCreate} className="form-row">
+                    <div className="form-group">
+                        <label>Batch Number</label>
+                        <input type="text" value={newContainer.batchNumber} onChange={e => setNewContainer({ ...newContainer, batchNumber: e.target.value })} required />
                     </div>
-                    <div>
-                        <label className="block text-sm">Container Number</label>
-                        <input type="text" className="border p-2 rounded w-full" value={newContainer.containerNumber} onChange={e => setNewContainer({ ...newContainer, containerNumber: e.target.value })} required />
+                    <div className="form-group">
+                        <label>Container Number</label>
+                        <input type="text" value={newContainer.containerNumber} onChange={e => setNewContainer({ ...newContainer, containerNumber: e.target.value })} required />
                     </div>
-                    <button className="bg-green-600 text-white px-4 py-2 rounded font-bold hover:bg-green-700">Register & Generate Key</button>
+                    <button className="btn btn-green" type="submit">Register & Generate Key</button>
                 </form>
             </div>
 
-            <div className="bg-white p-6 rounded-xl shadow">
-                <h2 className="text-xl font-bold mb-4">My Containers</h2>
-                <table className="w-full text-left border-collapse">
-                    <thead>
-                        <tr className="bg-gray-100 border-b">
-                            <th className="p-2">Number</th>
-                            <th className="p-2">Batch</th>
-                            <th className="p-2">Status</th>
-                            <th className="p-2">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {containers.map(c => (
-                            <tr key={c.id} className="border-b">
-                                <td className="p-2 text-blue-600 font-bold"><a href={`/container/${c.id}`}>{c.containerNumber}</a></td>
-                                <td className="p-2">{c.batchNumber}</td>
-                                <td className="p-2">
-                                    <span className={`px-2 py-1 rounded text-xs font-bold ${c.status === 'MANUFACTURED' ? 'bg-yellow-200' : 'bg-blue-200'}`}>
-                                        {c.status}
-                                    </span>
-                                </td>
-                                <td className="p-2 space-x-2">
-                                    {c.status === 'MANUFACTURED' && (
-                                        <button onClick={() => handleDispatch(c.id)} className="bg-blue-600 text-white px-3 py-1 rounded text-sm">Dispatch</button>
-                                    )}
-                                    {c.status === 'DISPATCHED' && (
-                                        <button onClick={() => handleGeneratePermit(c.id)} className="bg-purple-600 text-white px-3 py-1 rounded text-sm">Gen Permit</button>
-                                    )}
-                                </td>
+            <div className="card">
+                <h2 className="card-title">📋 My Containers</h2>
+                <div className="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Number</th>
+                                <th>Batch</th>
+                                <th>Status</th>
+                                <th>Actions</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            {containers.map(c => (
+                                <tr key={c.id}>
+                                    <td><a href={`/container/${c.id}`} className="link">{c.containerNumber}</a></td>
+                                    <td>{c.batchNumber}</td>
+                                    <td>
+                                        <span className={`badge ${c.status === 'MANUFACTURED' ? 'badge-yellow' : c.status === 'DELIVERED' ? 'badge-green' : 'badge-blue'}`}>
+                                            {c.status}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div className="btn-group">
+                                            {c.status === 'MANUFACTURED' && (
+                                                <button onClick={() => handleDispatch(c.id)} className="btn btn-primary btn-sm">Dispatch</button>
+                                            )}
+                                            {c.status === 'DISPATCHED' && (
+                                                <button onClick={() => handleGeneratePermit(c.id)} className="btn btn-purple btn-sm">Gen Permit</button>
+                                            )}
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                            {containers.length === 0 && (
+                                <tr><td colSpan="4" style={{ textAlign: 'center', padding: '32px', color: '#9ca3af' }}>No containers registered yet.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     );
