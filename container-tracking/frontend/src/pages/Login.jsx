@@ -32,6 +32,9 @@ const Login = () => {
                         <input type="password" value={password} onChange={e => setPassword(e.target.value)} required />
                     </div>
                     <button className="btn btn-primary" type="submit">Sign In</button>
+                    <p style={{ textAlign: 'center', marginTop: '16px', color: '#6b7280', fontSize: '0.9rem' }}>
+                        Don't have an account? <a href="/register" className="link">Sign up</a>
+                    </p>
                 </form>
             </div>
         </div>

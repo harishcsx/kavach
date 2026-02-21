@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 import Login from './pages/Login';
+import Register from './pages/Register';
 import ManufacturerDashboard from './pages/ManufacturerDashboard';
 import ReceiverVerification from './pages/ReceiverVerification';
 import EnforcementMonitor from './pages/EnforcementMonitor';
@@ -27,6 +28,7 @@ function App() {
             <main className="main-container">
               <Routes>
                 <Route path="/login" element={<Login />} />
+                <Route path="/register" element={<Register />} />
                 <Route path="/manufacturer" element={
                   <ProtectedRoute allowedRoles={['MANUFACTURER']}>
                     <ManufacturerDashboard />
