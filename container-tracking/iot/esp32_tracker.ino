@@ -20,8 +20,8 @@
 // ================================================================
 
 // WiFi
-#define WIFI_SSID              "YOUR_SSID"
-#define WIFI_PASS              "YOUR_PASSWORD"
+#define WIFI_SSID              "Wokwi-GUEST"
+#define WIFI_PASS              ""
 #define WIFI_RETRY_INTERVAL_MS  10000UL
 
 // Device & Container Provisioning

@@ -1,0 +1,5 @@
+{
+  "env": {
+    "WOKWI_IOT": "true"
+  }
+}
